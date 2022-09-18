@@ -1,0 +1,1 @@
+pwd ; pwd\necho Hello\ngedit & emacs & sleep 2\ngedit & emacs & sleep 2 ; sleep 5\nexit\ngedit \nexit\ngedit\nexit\nemacs & gedit & sleep 2\nexit\ngedit\nexit\nemacs & gedit & sleep 2 ; echo Hello\nexit\npwd ; pwd\ngedit & emacs & sleep 5; echo Hwllo\nexit\n./a.out\nexit\n
