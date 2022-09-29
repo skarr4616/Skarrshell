@@ -1,20 +1,46 @@
 #include "prompt.h"
-#include "echo.h"
-#include "cd.h"
-#include "ls.h"
-#include "history.h"
-#include "discover.h"
-#include "pinfo.h"
+#include "foreground.h"
+#include "background.h"
+#include "autocomplete.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 #include <fcntl.h>
-#include <dirent.h>
 #include <sys/wait.h>
 #include <time.h>
-#include <errno.h>
+#include <termios.h>
+#include <ctype.h>
+#include <dirent.h>
+
+struct termios orig_termios;
+
+void die(const char *s)
+{
+    perror(s);
+    exit(1);
+}
+
+void disableRawMode()
+{
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1)
+        die("tcsetattr");
+}
+
+void enableRawMode()
+{
+    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1)
+        die("tcgetattr");
+
+    atexit(disableRawMode);
+
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
+        die("tcsetattr");
+}
 
 // Function to tokenize the arguments with space and tab-space
 struct command getArgv(char *prompt)
@@ -34,8 +60,8 @@ struct command getArgv(char *prompt)
         i++;
     }
 
+    cmd.str_vec[i] = NULL;
     cmd.num = i;
-
     return cmd;
 }
 
@@ -49,11 +75,115 @@ void printNames()
 char *getPrompt()
 {
     fflush(stdout);
-    char *prompt = (char *)calloc(MAX_ARG_LEN, sizeof(char));
-    fgets(prompt, MAX_ARG_LEN, stdin);
 
-    if ((strlen(prompt) > 0) && (prompt[strlen(prompt) - 1] == '\n'))
-        prompt[strlen(prompt) - 1] = '\0';
+    char c;
+    char *prompt = (char *)calloc(MAX_ARG_LEN, sizeof(char));
+
+    setbuf(stdout, NULL);
+    enableRawMode();
+
+    memset(prompt, '\0', MAX_ARG_LEN);
+
+    int p = 0;
+
+    while (read(STDIN_FILENO, &c, 1) == 1)
+    {
+        if (c == '\n')
+            break;
+
+        // CTRL + D
+        if (c == 4)
+        {
+            if (p == 0)
+            {
+                printf("\n");
+                exit(0);
+            }
+            else
+            {
+                continue;
+            }
+        }
+
+        // Backspace
+        if (c == 127)
+        {
+            if (p > 0)
+            {
+                if (prompt[p - 1] == 9)
+                {
+                    for (int i = 0; i < 7; i++)
+                    {
+                        printf("\b");
+                    }
+                }
+
+                prompt[--p] = '\0';
+                printf("\b \b");
+            }
+
+            continue;
+        }
+
+        if (c == 9)
+        {
+            int t = p-1;
+
+            while (t >= 0 && prompt[t] != ' ')
+            {
+                t--;
+            }
+
+            t++;
+            char file[256] = {'\0'};
+            for (int i = 0; i < p; ++i)
+            {
+                file[i] = prompt[t];
+                t++;
+            }
+
+            int len = strlen(file);
+
+            int k = autocomplete(file);
+
+            if (k == 1)
+            {
+                while (len < strlen(file))
+                {
+                    prompt[p] = file[len];
+                    printf("%c", prompt[p]);
+                    p++;
+                    len++;
+                }
+            }
+            else
+            {
+                while (len < strlen(file))
+                {
+                    prompt[p] = file[len];
+                    p++;
+                    len++;
+                }
+
+                printNames();
+                printf("%s", prompt);
+            }
+
+            continue;
+        }
+
+        if (iscntrl(c))
+        {
+            continue;
+        }
+
+        prompt[p] = c;
+        printf("%c", c);
+        p++;
+    }
+
+    disableRawMode();
+    printf("\n");
 
     return prompt;
 }
@@ -61,14 +191,12 @@ char *getPrompt()
 // Separates the commands on the basis of semicolon (;) and executes each of them seperately
 void parseString(char *prompt)
 {
-    numProcess = 0;
-    
     int len = strlen(prompt);
     prompt[len] = ';';
     prompt[len + 1] = '\0';
 
     char cmd[256][256] = {'\0'};
-    
+
     int j = 0;
     int k = 0;
 
@@ -133,143 +261,29 @@ void execCommand(char *prompt)
         else if (forkRet == 0)
         {
             setpgrp();
-            struct command argv = getArgv(backgrd.str_vec[i]);
-
-            int x = execvp(argv.str_vec[0], argv.str_vec);
-
-            if (x == -1)
-            {
-                printf("%s: Command not found\n", argv.str_vec[0]);
-            }
-
-            exit(0);
+            background(backgrd.str_vec[i]);
         }
         else
         {
+            bg_count++;
+
             // Printing the pid of newly created background process and storing its name
             printf("[%d] %d\n", numProcess, forkRet);
             updatePlist(forkRet, backgrd.str_vec[i]);
         }
     }
 
+    stdin_save = dup(STDIN_FILENO);
+    stdout_save = dup(STDOUT_FILENO);
+
     // Executing foreground process
-    execute(backgrd.str_vec[j - 1]);
-}
+    foreground(backgrd.str_vec[j - 1]);
 
-// Execute the commands
-void execute(char *prompt)
-{
-    // Findind the first argument of the command to identify its type
-    int len = strlen(prompt);
-    int i = 0;
+    dup2(stdin_save, STDIN_FILENO);
+    dup2(stdout_save, STDOUT_FILENO);
 
-    while (i < len && (prompt[i] == ' ' || prompt[i] == '\t'))
-        i++;
-
-    int l = 0;
-    char cmd[MAX_ARG_LEN];
-    while (prompt[i] != ' ' && prompt[i] != '\t' && prompt[i] != '\0')
-    {
-        cmd[l] = prompt[i];
-        i++;
-        l++;
-    }
-
-    cmd[l] = '\0';
-
-    // Builtin commands
-    if (strcmp(cmd, "cd") == 0)
-    {
-        cd(prompt);
-        return;
-    }
-
-    if (strcmp(cmd, "pwd") == 0)
-    {
-        printf("%s\n", curr_path);
-        return;
-    }
-
-    if (strcmp(cmd, "echo") == 0)
-    {
-        echo(prompt, i, len);
-        return;
-    }
-
-    if (strcmp(cmd, "ls") == 0)
-    {
-        ls(prompt);
-        return;
-    }
-
-    if (strcmp(cmd, "pinfo") == 0)
-    {
-        pinfo(prompt);
-        return;
-    }
-
-    if (strcmp(cmd, "discover") == 0)
-    {
-        discover(prompt);
-        return;
-    }
-
-    if (strcmp(cmd, "history") == 0)
-    {
-        printHistory();
-        return;
-    }
-
-    if (strcmp(cmd, "exit") == 0)
-    {
-        exit(0);
-    }
-
-    if (cmd[0] == '\0')
-        return;
-
-    fg_running = true;
-
-    // System commands
-    time_t seconds = time(NULL);
-    struct command argv = getArgv(prompt);
-
-    int forkRet = fork();
-
-    if (forkRet < 0)
-    {
-        printf("Error: Process fork failed\n");
-        return;
-    }
-    else if (forkRet == 0)
-    {
-        int x = execvp(argv.str_vec[0], argv.str_vec);
-
-        if (x == -1)
-        {
-            printf("%s: Command not found\n", argv.str_vec[0]);
-            exit(1);
-        }
-
-        exit(0);
-    }
-    else
-    {
-
-        int status = 0;
-        waitpid(forkRet, &status, WUNTRACED);
-
-        fg_running = false;
-
-        seconds = time(NULL) - seconds;
-
-        if (seconds > 1)
-        {
-            printf("# %s for %ld seconds\n", argv.str_vec[0], seconds);
-        }
-    }
-
-    return;
+    close(stdin_save);
+    close(stdout_save);
 }
 
 // Updates the process list when a new background process is created
@@ -277,28 +291,25 @@ void updatePlist(int pid, char *prompt)
 {
     time_t dur = time(NULL);
     int len = strlen(prompt);
+
+    if (prompt[len-1] == ' ')
+    {
+        prompt[len - 1] = '\0';
+        len -= 1;
+    }
+
     int i = 0;
 
     while (i < len && (prompt[i] == ' ' || prompt[i] == '\t'))
         i++;
 
-    int l = 0;
-    char cmd[MAX_ARG_LEN];
-    while (prompt[i] != ' ' && prompt[i] != '\t' && prompt[i] != '\0')
-    {
-        cmd[l] = prompt[i];
-        i++;
-        l++;
-    }
-
-    cmd[l] = '\0';
-
     if (pHead == NULL)
     {
         pHead = (struct processInfo *)calloc(1, sizeof(struct processInfo));
 
+        pHead->job_Num = numProcess;
         pHead->pid = pid;
-        strcpy(pHead->pName, cmd);
+        strcpy(pHead->pName, prompt + i);
         pHead->seconds = dur;
         pHead->next = NULL;
 
@@ -309,8 +320,9 @@ void updatePlist(int pid, char *prompt)
         pNext->next = (struct processInfo *)calloc(1, sizeof(struct processInfo));
         pNext = pNext->next;
 
+        pNext->job_Num = numProcess;
         pNext->pid = pid;
-        strcpy(pNext->pName, cmd);
+        strcpy(pNext->pName, prompt + i);
         pNext->seconds = dur;
         pNext->next = NULL;
     }
@@ -325,6 +337,10 @@ void delProcess(int pid)
     {
         pHead = pHead->next;
         free(temp);
+
+        if (pHead == NULL)
+            numProcess = 0;
+
         return;
     }
 
@@ -340,6 +356,9 @@ void delProcess(int pid)
 
         temp = temp->next;
     }
+
+    if (pHead == NULL)
+        numProcess = 0;
 }
 
 // Returns the process name of the given process id
@@ -358,16 +377,47 @@ struct processInfo *getProcess(int pid)
     }
 }
 
+// Returns the process name of the given job id
+struct processInfo *getProcessJob(int job)
+{
+    struct processInfo *temp = pHead;
+
+    while (temp != NULL)
+    {
+        if (temp->job_Num == job)
+        {
+            return temp;
+        }
+
+        temp = temp->next;
+    }
+}
+
 // Signal handler function to handle child death
 void end_bg_process(int sig)
 {
     int stat;
-    int bg_pid = waitpid(-1, &stat, WNOHANG | WUNTRACED);
+    int bg_pid = waitpid(-1, &stat, WNOHANG);
+
+    if (bg_pid == fg_Proc.pid)
+        return;
 
     if (bg_pid > 0)
     {
         struct processInfo *temp = getProcess(bg_pid);
         time_t dur = time(NULL) - temp->seconds;
+
+        int i = 0;
+        int l = 0;
+        char cmd[MAX_ARG_LEN];
+        while (temp->pName[i] != ' ' && temp->pName[i] != '\t' && temp->pName[i] != '\0')
+        {
+            cmd[l] = temp->pName[i];
+            i++;
+            l++;
+        }
+
+        cmd[l] = '\0';
 
         if (WIFEXITED(stat))
         {
@@ -375,9 +425,9 @@ void end_bg_process(int sig)
                 printf("\n");
 
             if ((WEXITSTATUS(stat)) == 0)
-                printf("%s with pid = %d exited normally # After %ld seconds\n", temp->pName, bg_pid, dur);
+                printf("%s with pid = %d exited normally # After %ld seconds\n", cmd, bg_pid, dur);
             else
-                printf("%s with pid = %d exited abnormally # After %ld seconds\n", temp->pName, bg_pid, dur);
+                printf("%s with pid = %d exited abnormally # After %ld seconds\n", cmd, bg_pid, dur);
         }
         else
         {
@@ -391,6 +441,53 @@ void end_bg_process(int sig)
             printNames();
 
         delProcess(bg_pid);
+        bg_count--;
         fflush(stdout);
     }
+}
+
+// Signal handler function to handle SIGINT signal (CTRL+C)
+void end_fg_process(int sig)
+{
+    printf("\n");
+
+    if (fg_running)
+    {
+        kill(fg_Proc.pid, SIGINT);
+    }
+
+    if (!fg_running)
+        printNames();
+
+    fflush(stdout);
+
+    fg_running = false;
+}
+
+// Signal handler function to handle SIGTSTP signal (CTRL+Z)
+void stop_fg_process(int sig)
+{
+    bool p = true;
+    int fg_pid = fg_Proc.pid;
+
+    if (fg_pid != -1)
+    {
+        p = false;
+        numProcess++;
+
+        kill(fg_pid, SIGTTIN);
+        kill(fg_pid, SIGTSTP);
+
+        bg_count++;
+        updatePlist(fg_pid, fg_Proc.pName);
+    }
+
+    printf("\n");
+
+    if (p)
+    {
+        printNames();
+    }
+
+    fflush(stdout);
 }

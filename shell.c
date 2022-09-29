@@ -11,16 +11,19 @@
 #include "prompt.h"
 #include "history.h"
 
+char userName[256] = {'\0'};
+
 char nline[2] = "\\n";
 char mod_path[PATH_MAX] = "~";
-char *builtIn[4] = {"echo", "cd", "pwd"};
 int path_has_home = true;
 struct processInfo *pHead = NULL;
 
 int nextPos = 0;
 int startPos = 0;
 
+int bg_count = 0;
 bool fg_running = false;
+bool fg_killed = false;
 
 int main()
 {
@@ -40,12 +43,24 @@ int main()
     printNames();
 
     // Handle finished background processes: Print process name along with pid and exit status
+    signal(SIGCHLD, SIG_IGN);
     signal(SIGCHLD, end_bg_process);
+
+    signal(SIGINT, SIG_IGN);
+    signal(SIGINT, end_fg_process);
+
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGTSTP, stop_fg_process);
+
+    fg_Proc.job_Num = 0;
+    fg_Proc.pid = -1;
 
     while (true)
     {
+        getcwd(curr_path, PATH_MAX);
+
         // Take input
-        char prompt[MAX_ARG_LEN];
+        char prompt[MAX_ARG_LEN] = {'\0'};
         strcpy(prompt, getPrompt());
 
         // Store the input in history and update the history file

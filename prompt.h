@@ -27,10 +27,11 @@ typedef int bool;
 
 struct command {
     int num;
-    char* str_vec[MAX_ARG_LEN];
+    char *str_vec[MAX_ARG_LEN];
 };
 
 struct processInfo {
+    int job_Num;
     int pid;
     char pName[MAX_ARG_LEN];
     int seconds;
@@ -45,26 +46,37 @@ char curr_path[PATH_MAX];
 char prev_path[PATH_MAX];
 char mod_path[PATH_MAX];
 
-char *builtIn[4];
-
 int path_has_home;
 
 int numProcess;
+int bg_count;
 
 bool fg_running;
+bool fg_killed;
 
 struct processInfo* pHead;
 struct processInfo* pNext;
 
+struct processInfo fg_Proc;
+
+int stdin_save;
+int stdout_save;
+
 struct command getArgv(char *prompt);
 void printNames();
 char* getPrompt();
-void parseString(char *prompt);
+void parseString(char* prompt);
 void execCommand(char* prompt);
 void execute(char* prompt);
 void delProcess(int pid);
-void updatePlist(int pid, char *prompt);
+void updatePlist(int pid, char* prompt);
 struct processInfo *getProcess(int pid);
+struct processInfo *getProcessJob(int job);
+void pKill(char* prompt);
+void jobs(char* prompt);
+void fg(char *prompt);
 void end_bg_process(int sig);
+void end_fg_process(int sig);
+void stop_fg_process(int sig);
 
 #endif
