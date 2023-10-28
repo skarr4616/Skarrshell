@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "prompt.h": "c",
+        "autocomplete.h": "c",
+        "history.h": "c"
+    }
+}

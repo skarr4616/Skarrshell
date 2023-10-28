@@ -1,5 +1,5 @@
-#include "prompt.h"
 #include "cd.h"
+#include "prompt.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
