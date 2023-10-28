@@ -24,6 +24,7 @@ int startPos = 0;
 int bg_count = 0;
 bool fg_running = false;
 bool fg_killed = false;
+bool ctrl_c = false;
 
 int main()
 {

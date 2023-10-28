@@ -53,6 +53,7 @@ int bg_count;
 
 bool fg_running;
 bool fg_killed;
+bool ctrl_c;
 
 struct processInfo* pHead;
 struct processInfo* pNext;

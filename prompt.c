@@ -88,6 +88,13 @@ char *getPrompt()
 
     while (read(STDIN_FILENO, &c, 1) == 1)
     {
+        if (ctrl_c)
+        {
+            memset(prompt, '\0', MAX_ARG_LEN);
+            p = 0;
+            ctrl_c = false;
+        }
+
         if (c == '\n')
             break;
 
@@ -457,7 +464,10 @@ void end_fg_process(int sig)
     }
 
     if (!fg_running)
+    {
         printNames();
+        ctrl_c = true;
+    }
 
     fflush(stdout);
 
